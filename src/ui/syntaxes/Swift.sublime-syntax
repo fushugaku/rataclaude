@@ -1,0 +1,132 @@
+%YAML 1.2
+---
+name: Swift
+scope: source.swift
+file_extensions:
+  - swift
+
+contexts:
+  main:
+    - include: comments
+    - include: attributes
+    - include: strings
+    - include: numbers
+    - include: declarations
+    - include: control
+    - include: storage
+    - include: constants
+    - include: builtin-types
+    - include: builtin-functions
+    - include: language-variables
+    - include: operators
+
+  comments:
+    - match: ///.*$\n?
+      scope: comment.line.documentation.swift
+    - match: //.*$\n?
+      scope: comment.line.double-slash.swift
+    - match: /\*\*
+      scope: punctuation.definition.comment.begin.swift
+      push:
+        - meta_scope: comment.block.documentation.swift
+        - match: \*/
+          scope: punctuation.definition.comment.end.swift
+          pop: true
+        - include: comments
+    - match: /\*
+      scope: punctuation.definition.comment.begin.swift
+      push:
+        - meta_scope: comment.block.swift
+        - match: \*/
+          scope: punctuation.definition.comment.end.swift
+          pop: true
+        - include: comments
+
+  attributes:
+    - match: '@\w+'
+      scope: variable.annotation.swift
+
+  strings:
+    - match: '#*"""'
+      scope: punctuation.definition.string.begin.swift
+      push:
+        - meta_scope: string.quoted.triple.swift
+        - match: '"""#*'
+          scope: punctuation.definition.string.end.swift
+          pop: true
+        - include: string-escape
+        - include: string-interpolation
+    - match: '#*"'
+      scope: punctuation.definition.string.begin.swift
+      push:
+        - meta_scope: string.quoted.double.swift
+        - match: '"#*'
+          scope: punctuation.definition.string.end.swift
+          pop: true
+        - match: $\n?
+          scope: invalid.illegal.newline.swift
+          pop: true
+        - include: string-escape
+        - include: string-interpolation
+
+  string-escape:
+    - match: '\\[0\\tnr"'']'
+      scope: constant.character.escape.swift
+    - match: '\\u\{[0-9a-fA-F]+\}'
+      scope: constant.character.escape.unicode.swift
+
+  string-interpolation:
+    - match: '\\\('
+      scope: punctuation.section.interpolation.begin.swift
+      push:
+        - clear_scopes: 1
+        - meta_scope: meta.interpolation.swift
+        - meta_content_scope: source.swift.embedded
+        - match: '\)'
+          scope: punctuation.section.interpolation.end.swift
+          pop: true
+        - include: main
+
+  numbers:
+    - match: '\b0x[0-9a-fA-F][0-9a-fA-F_]*\b'
+      scope: constant.numeric.hex.swift
+    - match: '\b0o[0-7][0-7_]*\b'
+      scope: constant.numeric.octal.swift
+    - match: '\b0b[01][01_]*\b'
+      scope: constant.numeric.binary.swift
+    - match: '\b[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?\b'
+      scope: constant.numeric.swift
+
+  declarations:
+    - match: '\b(func|var|let|class|struct|enum|protocol|extension|typealias|associatedtype|init|deinit|subscript|operator|precedencegroup|macro|actor)\b'
+      scope: keyword.declaration.swift
+
+  control:
+    - match: '\b(if|else|guard|switch|case|default|for|while|repeat|do|in|where|return|break|continue|fallthrough|throw|try|catch|defer|as|is|import|#if|#elseif|#else|#endif|#available|#unavailable|#selector|#keyPath)\b'
+      scope: keyword.control.swift
+
+  storage:
+    - match: '\b(public|private|fileprivate|internal|open|static|final|override|mutating|nonmutating|required|optional|convenience|dynamic|lazy|weak|unowned|indirect|infix|prefix|postfix|inout|some|any|async|await|nonisolated|isolated|consuming|borrowing|sending)\b'
+      scope: storage.modifier.swift
+
+  constants:
+    - match: '\b(true|false)\b'
+      scope: constant.language.boolean.swift
+    - match: '\b(nil)\b'
+      scope: constant.language.nil.swift
+
+  builtin-types:
+    - match: '\b(Int|Int8|Int16|Int32|Int64|UInt|UInt8|UInt16|UInt32|UInt64|Float|Double|Float16|Float80|Bool|String|Character|Void|Never|Optional|Array|Dictionary|Set|Result|Error|Any|AnyObject|AnyHashable|Codable|Encodable|Decodable|Hashable|Equatable|Comparable|Identifiable|Sendable|CustomStringConvertible|Sequence|Collection|AsyncSequence|AsyncStream|Task|MainActor|Data|URL|Date|UUID|CGFloat|CGPoint|CGSize|CGRect)\b'
+      scope: support.type.swift
+
+  builtin-functions:
+    - match: '\b(print|debugPrint|dump|fatalError|precondition|preconditionFailure|assert|assertionFailure|type|min|max|abs|stride|zip)\b'
+      scope: support.function.swift
+
+  language-variables:
+    - match: '\b(self|Self|super)\b'
+      scope: variable.language.swift
+
+  operators:
+    - match: '->|\.\.\.|\.\.<'
+      scope: keyword.operator.swift
