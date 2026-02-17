@@ -27,6 +27,11 @@ impl TerminalEmulator {
         self.parser.screen()
     }
 
+    pub fn mouse_enabled(&self) -> bool {
+        self.parser.screen().mouse_protocol_mode()
+            != vt100::MouseProtocolMode::None
+    }
+
     pub fn render(&self, area: Rect, buf: &mut Buffer, focused: bool) {
         let screen = self.parser.screen();
 

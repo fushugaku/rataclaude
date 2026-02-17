@@ -161,6 +161,53 @@ impl GitRepo {
             });
         }
 
+        // If no hunks found, the file might be untracked — read it directly
+        if hunks.is_empty() {
+            if let Some(workdir) = self.repo.workdir() {
+                let full_path = workdir.join(path);
+                if let Ok(content) = std::fs::read(&full_path) {
+                    if let Ok(text) = String::from_utf8(content) {
+                        let file_lines: Vec<&str> = text.split('\n').collect();
+                        let total = if text.ends_with('\n') {
+                            file_lines.len().saturating_sub(1)
+                        } else {
+                            file_lines.len()
+                        };
+                        let header = format!("@@ -0,0 +1,{} @@ new file\n", total);
+                        let mut lines = vec![DiffLine {
+                            kind: DiffLineKind::HunkHeader,
+                            content: header.clone(),
+                            old_lineno: None,
+                            new_lineno: None,
+                        }];
+                        for (i, line) in file_lines.iter().enumerate() {
+                            if i == file_lines.len() - 1 && line.is_empty() && text.ends_with('\n') {
+                                break;
+                            }
+                            lines.push(DiffLine {
+                                kind: DiffLineKind::Addition,
+                                content: format!("{}\n", line),
+                                old_lineno: None,
+                                new_lineno: Some((i + 1) as u32),
+                            });
+                        }
+                        hunks.push(DiffHunk { header, lines });
+                    } else {
+                        // Binary file
+                        hunks.push(DiffHunk {
+                            header: String::new(),
+                            lines: vec![DiffLine {
+                                kind: DiffLineKind::Context,
+                                content: "(binary file)\n".to_string(),
+                                old_lineno: None,
+                                new_lineno: None,
+                            }],
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(FileDiff {
             path: path.to_string(),
             hunks,

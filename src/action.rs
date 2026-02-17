@@ -20,9 +20,13 @@ pub enum Action {
     DiffScrollUp,
     DiffScrollDown,
     DiffScrollAmount(i16),
+    DiffScrollLeft,
+    DiffScrollRight,
     DiffNextHunk,
     DiffPrevHunk,
     DiffClose,
+    DiffToggleSelect,
+    DiffSendLines,
 
     // Send to Claude
     SendToClaude,

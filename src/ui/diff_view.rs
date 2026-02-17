@@ -35,8 +35,14 @@ const BORDER_UNFOCUSED: Color = Color::Rgb(55, 55, 65);
 const SCROLLBAR_TRACK: Color = Color::Rgb(35, 35, 40);
 const SCROLLBAR_THUMB: Color = Color::Rgb(90, 90, 110);
 
+const CURSOR_BG: Color = Color::Rgb(45, 50, 65);
+const SELECT_BG: Color = Color::Rgb(40, 55, 80);
+
 pub struct DiffViewState {
     pub scroll: u16,
+    pub h_scroll: u16,
+    pub cursor: usize,
+    pub select_anchor: Option<usize>,
     pub file_path: Option<String>,
 }
 
@@ -44,7 +50,35 @@ impl DiffViewState {
     pub fn new() -> Self {
         Self {
             scroll: 0,
+            h_scroll: 0,
+            cursor: 0,
+            select_anchor: None,
             file_path: None,
+        }
+    }
+
+    pub fn cursor_up(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+        // Keep cursor in view
+        if self.cursor < self.scroll as usize {
+            self.scroll = self.cursor as u16;
+        }
+    }
+
+    pub fn cursor_down(&mut self, max: usize) {
+        if self.cursor + 1 < max {
+            self.cursor += 1;
+        }
+    }
+
+    /// Ensure cursor is scrolled into view given viewport height
+    pub fn ensure_visible(&mut self, viewport_h: u16) {
+        let bottom = self.scroll as usize + viewport_h as usize;
+        if self.cursor >= bottom {
+            self.scroll = (self.cursor + 1).saturating_sub(viewport_h as usize) as u16;
+        }
+        if self.cursor < self.scroll as usize {
+            self.scroll = self.cursor as u16;
         }
     }
 
@@ -56,8 +90,39 @@ impl DiffViewState {
         self.scroll = (self.scroll + amount).min(max);
     }
 
+    pub fn scroll_left(&mut self, amount: u16) {
+        self.h_scroll = self.h_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_right(&mut self, amount: u16) {
+        self.h_scroll = self.h_scroll.saturating_add(amount);
+    }
+
+    pub fn toggle_select(&mut self) {
+        if self.select_anchor.is_some() {
+            self.select_anchor = None;
+        } else {
+            self.select_anchor = Some(self.cursor);
+        }
+    }
+
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        self.select_anchor.map(|anchor| {
+            let start = anchor.min(self.cursor);
+            let end = anchor.max(self.cursor);
+            (start, end)
+        })
+    }
+
+    pub fn clear_select(&mut self) {
+        self.select_anchor = None;
+    }
+
     pub fn reset(&mut self) {
         self.scroll = 0;
+        self.h_scroll = 0;
+        self.cursor = 0;
+        self.select_anchor = None;
         self.file_path = None;
     }
 
@@ -65,6 +130,9 @@ impl DiffViewState {
         if self.file_path.as_deref() != Some(path) {
             self.file_path = Some(path.to_string());
             self.scroll = 0;
+            self.h_scroll = 0;
+            self.cursor = 0;
+            self.select_anchor = None;
         }
     }
 }
@@ -133,7 +201,7 @@ pub fn render_diff(
     }
 
     match diff {
-        Some(diff) => render_diff_lines(diff, state, inner, buf),
+        Some(diff) => render_diff_lines(diff, state, focused, inner, buf),
         None => render_empty(inner, buf),
     }
 }
@@ -155,7 +223,7 @@ fn render_empty(area: Rect, buf: &mut Buffer) {
     }
 }
 
-fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, area: Rect, buf: &mut Buffer) {
+fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, focused: bool, area: Rect, buf: &mut Buffer) {
     let all_lines = diff.all_lines();
     let total = all_lines.len();
     let scroll = state.scroll as usize;
@@ -241,22 +309,49 @@ fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, area: Rect, buf: &m
                     .add_modifier(Modifier::BOLD);
                 buf.set_string(content_x, y, &prefix_char.to_string(), prefix_style);
 
-                // ── Content with syntax highlighting ──
+                // ── Content with syntax highlighting + horizontal scroll ──
                 let content = line.content.trim_end_matches('\n');
+                let h_off = state.h_scroll as usize;
+                let content_w = (scrollbar_x.saturating_sub(content_x + 1)) as usize;
                 let spans = syntax::highlight_line(&diff.path, content);
 
                 let mut cx = content_x + 1;
                 if spans.is_empty() {
-                    // Fallback: render plain
+                    // Fallback: render plain with h_scroll (char-aware)
+                    let visible: String = content.chars()
+                        .skip(h_off)
+                        .take(content_w)
+                        .collect();
                     buf.set_string(
                         cx,
                         y,
-                        content,
+                        &visible,
                         Style::default().fg(line_fg).bg(line_bg),
                     );
-                    cx += content.len() as u16;
+                    cx += visible.chars().count() as u16;
                 } else {
+                    // Walk through spans using char counts, not byte counts
+                    let mut char_pos: usize = 0;
                     for span in &spans {
+                        let span_chars: usize = span.text.chars().count();
+                        let span_end = char_pos + span_chars;
+
+                        if span_end <= h_off {
+                            char_pos = span_end;
+                            continue;
+                        }
+
+                        let skip = if h_off > char_pos { h_off - char_pos } else { 0 };
+                        let rendered = (cx - (content_x + 1)) as usize;
+                        let remaining_w = content_w.saturating_sub(rendered);
+                        if remaining_w == 0 {
+                            break;
+                        }
+                        let visible: String = span.text.chars()
+                            .skip(skip)
+                            .take(remaining_w)
+                            .collect();
+
                         let mut style = Style::default().fg(span.fg).bg(line_bg);
                         if span.bold {
                             style = style.add_modifier(Modifier::BOLD);
@@ -264,8 +359,11 @@ fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, area: Rect, buf: &m
                         if span.italic {
                             style = style.add_modifier(Modifier::ITALIC);
                         }
-                        buf.set_string(cx, y, &span.text, style);
-                        cx += span.text.len() as u16;
+                        let vis_chars = visible.chars().count() as u16;
+                        buf.set_string(cx, y, &visible, style);
+                        cx += vis_chars;
+
+                        char_pos = span_end;
                     }
                 }
 
@@ -281,6 +379,23 @@ fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, area: Rect, buf: &m
 
         // Scrollbar column
         render_scrollbar_cell(scrollbar_x, y, row, area.height, scroll, total, buf);
+
+        // Cursor / selection overlay
+        if line_idx < total {
+            let is_cursor = line_idx == state.cursor && focused;
+            let is_selected = state.selection_range()
+                .map(|(s, e)| line_idx >= s && line_idx <= e)
+                .unwrap_or(false);
+
+            if is_cursor || is_selected {
+                let overlay_bg = if is_cursor { CURSOR_BG } else { SELECT_BG };
+                for x in area.x..scrollbar_x {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_style(cell.style().bg(overlay_bg));
+                    }
+                }
+            }
+        }
     }
 }
 

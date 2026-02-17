@@ -58,12 +58,19 @@ fn map_diff_view_key(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
             Some(Action::DiffScrollUp)
         }
+        (KeyModifiers::NONE, KeyCode::Char('h')) | (KeyModifiers::NONE, KeyCode::Left) => {
+            Some(Action::DiffScrollLeft)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('l')) | (KeyModifiers::NONE, KeyCode::Right) => {
+            Some(Action::DiffScrollRight)
+        }
         (KeyModifiers::SHIFT, KeyCode::Char('J')) => Some(Action::DiffNextHunk),
         (KeyModifiers::SHIFT, KeyCode::Char('K')) => Some(Action::DiffPrevHunk),
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::DiffToggleSelect),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::DiffClose)
         }
-        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::SendToClaude),
+        (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::DiffSendLines),
         (KeyModifiers::SHIFT, KeyCode::Char('S')) => Some(Action::SendToClaudeWithPrompt),
         _ => None,
     }
@@ -81,6 +88,12 @@ pub fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
             }
             _ => {}
         }
+        return bytes;
+    }
+
+    // Shift+Enter: send CSI u encoding so Claude Code sees it as newline (not submit)
+    if key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::Enter {
+        bytes.extend_from_slice(b"\x1b[13;2u");
         return bytes;
     }
 

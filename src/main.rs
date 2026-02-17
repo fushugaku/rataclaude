@@ -84,7 +84,7 @@ async fn run() -> Result<()> {
     // Spawn tick timer
     let tx_tick = tx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {
             interval.tick().await;
             if tx_tick.send(AppEvent::Tick).is_err() {
@@ -102,7 +102,8 @@ async fn run() -> Result<()> {
             let (pty_area, git_area) = app.layout.split(main_area);
             let (status_area, diff_area) = AppLayout::split_right(git_area);
 
-            // Store rects for mouse hit-testing
+            // Store rects for mouse hit-testing and drag resize
+            app.main_area = main_area;
             app.update_rects(pty_area, status_area, diff_area);
 
             // Resize PTY if needed

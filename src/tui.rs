@@ -14,7 +14,10 @@ pub fn init() -> Result<Tui> {
     execute!(
         stdout,
         EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
     )
     .context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
@@ -27,6 +30,7 @@ pub fn restore() -> Result<()> {
     let _ = terminal::disable_raw_mode();
     let _ = execute!(
         stdout,
+        crossterm::event::PopKeyboardEnhancementFlags,
         LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture
     );

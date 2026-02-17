@@ -44,6 +44,8 @@ pub struct App {
     pub pty_rect: Rect,
     pub git_status_rect: Rect,
     pub diff_rect: Rect,
+    pub main_area: Rect,
+    pub dragging_divider: bool,
 }
 
 impl App {
@@ -81,6 +83,8 @@ impl App {
             pty_rect: Rect::default(),
             git_status_rect: Rect::default(),
             diff_rect: Rect::default(),
+            main_area: Rect::default(),
+            dragging_divider: false,
         }
     }
 
@@ -164,6 +168,14 @@ impl App {
         Ok(())
     }
 
+    fn on_divider(&self, col: u16, row: u16) -> bool {
+        // The divider is the right edge of the PTY pane
+        let divider_x = self.pty_rect.right();
+        row >= self.main_area.y
+            && row < self.main_area.bottom()
+            && (col == divider_x || col == divider_x.saturating_sub(1))
+    }
+
     async fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -171,31 +183,53 @@ impl App {
                 if self.focus == Focus::PromptDialog {
                     return Ok(());
                 }
+                // Check if clicking on the divider to start drag
+                if self.on_divider(mouse.column, mouse.row) {
+                    self.dragging_divider = true;
+                    return Ok(());
+                }
                 if let Some(target) = self.hit_test(mouse.column, mouse.row) {
                     self.handle_action(Action::FocusPane(target)).await?;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging_divider = false;
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.dragging_divider && self.main_area.width > 0 {
+                    let relative_x = mouse.column.saturating_sub(self.main_area.x);
+                    let pct = ((relative_x as u32 * 100) / self.main_area.width as u32) as u16;
+                    self.layout.split_percent = pct.clamp(20, 80);
                 }
             }
             MouseEventKind::ScrollDown => {
                 if rect_contains(self.diff_rect, mouse.column, mouse.row) {
                     self.handle_action(Action::DiffScrollAmount(3)).await?;
-                } else if self.focus == Focus::Pty
-                    && rect_contains(self.pty_rect, mouse.column, mouse.row)
+                } else if rect_contains(self.pty_rect, mouse.column, mouse.row)
+                    && self.emulator.mouse_enabled()
                 {
-                    // Forward scroll to PTY as arrow keys
-                    self.pty.write_input(b"\x1b[B").await?;
-                    self.pty.write_input(b"\x1b[B").await?;
-                    self.pty.write_input(b"\x1b[B").await?;
+                    // Forward as SGR mouse scroll events (button 65 = scroll down)
+                    let x = mouse.column.saturating_sub(self.pty_rect.x) + 1;
+                    let y = mouse.row.saturating_sub(self.pty_rect.y) + 1;
+                    for _ in 0..3 {
+                        let seq = format!("\x1b[<65;{};{}M", x, y);
+                        self.pty.write_input(seq.as_bytes()).await?;
+                    }
                 }
             }
             MouseEventKind::ScrollUp => {
                 if rect_contains(self.diff_rect, mouse.column, mouse.row) {
                     self.handle_action(Action::DiffScrollAmount(-3)).await?;
-                } else if self.focus == Focus::Pty
-                    && rect_contains(self.pty_rect, mouse.column, mouse.row)
+                } else if rect_contains(self.pty_rect, mouse.column, mouse.row)
+                    && self.emulator.mouse_enabled()
                 {
-                    self.pty.write_input(b"\x1b[A").await?;
-                    self.pty.write_input(b"\x1b[A").await?;
-                    self.pty.write_input(b"\x1b[A").await?;
+                    // Forward as SGR mouse scroll events (button 64 = scroll up)
+                    let x = mouse.column.saturating_sub(self.pty_rect.x) + 1;
+                    let y = mouse.row.saturating_sub(self.pty_rect.y) + 1;
+                    for _ in 0..3 {
+                        let seq = format!("\x1b[<64;{};{}M", x, y);
+                        self.pty.write_input(seq.as_bytes()).await?;
+                    }
                 }
             }
             _ => {}
@@ -296,13 +330,17 @@ impl App {
                 }
             }
             Action::DiffScrollUp => {
-                self.diff_state.scroll_up(1);
+                self.diff_state.cursor_up();
             }
             Action::DiffScrollDown => {
                 let max = self.current_diff.as_ref()
-                    .map(|d| d.total_lines() as u16)
+                    .map(|d| d.total_lines())
                     .unwrap_or(0);
-                self.diff_state.scroll_down(1, max);
+                self.diff_state.cursor_down(max);
+                // viewport height is approximate; ensure_visible will be called in draw
+                self.diff_state.ensure_visible(
+                    self.diff_rect.height.saturating_sub(2)
+                );
             }
             Action::DiffScrollAmount(delta) => {
                 if delta < 0 {
@@ -314,13 +352,22 @@ impl App {
                     self.diff_state.scroll_down(delta as u16, max);
                 }
             }
+            Action::DiffScrollLeft => {
+                self.diff_state.scroll_left(4);
+            }
+            Action::DiffScrollRight => {
+                self.diff_state.scroll_right(4);
+            }
             Action::DiffNextHunk => {
                 if let Some(ref diff) = self.current_diff {
                     let lines = diff.all_lines();
-                    let current = self.diff_state.scroll as usize;
+                    let current = self.diff_state.cursor;
                     for (i, line) in lines.iter().enumerate().skip(current + 1) {
                         if line.kind == crate::git::diff::DiffLineKind::HunkHeader {
-                            self.diff_state.scroll = i as u16;
+                            self.diff_state.cursor = i;
+                            self.diff_state.ensure_visible(
+                                self.diff_rect.height.saturating_sub(2)
+                            );
                             break;
                         }
                     }
@@ -329,16 +376,56 @@ impl App {
             Action::DiffPrevHunk => {
                 if let Some(ref diff) = self.current_diff {
                     let lines = diff.all_lines();
-                    let current = self.diff_state.scroll as usize;
+                    let current = self.diff_state.cursor;
                     for i in (0..current).rev() {
                         if lines[i].kind == crate::git::diff::DiffLineKind::HunkHeader {
-                            self.diff_state.scroll = i as u16;
+                            self.diff_state.cursor = i;
+                            self.diff_state.ensure_visible(
+                                self.diff_rect.height.saturating_sub(2)
+                            );
                             break;
                         }
                     }
                 }
             }
+            Action::DiffToggleSelect => {
+                self.diff_state.toggle_select();
+            }
+            Action::DiffSendLines => {
+                if let Some(ref diff) = self.current_diff {
+                    let all_lines = diff.all_lines();
+                    // Get line range from selection or just cursor line
+                    let (start_idx, end_idx) = self.diff_state.selection_range()
+                        .unwrap_or((self.diff_state.cursor, self.diff_state.cursor));
+
+                    // Collect real line numbers from the selected range
+                    let mut line_nums: Vec<u32> = Vec::new();
+                    for i in start_idx..=end_idx {
+                        if i < all_lines.len() {
+                            if let Some(n) = all_lines[i].new_lineno {
+                                line_nums.push(n);
+                            } else if let Some(n) = all_lines[i].old_lineno {
+                                line_nums.push(n);
+                            }
+                        }
+                    }
+
+                    if !line_nums.is_empty() {
+                        let first = line_nums[0];
+                        let last = *line_nums.last().unwrap();
+                        let cmd = if first == last {
+                            format!("@{}:{}\n", diff.path, first)
+                        } else {
+                            format!("@{}:{}-{}\n", diff.path, first, last)
+                        };
+                        self.pty.inject_input(&cmd).await?;
+                        self.diff_state.clear_select();
+                        self.focus = Focus::Pty;
+                    }
+                }
+            }
             Action::DiffClose => {
+                self.diff_state.clear_select();
                 self.focus = Focus::GitStatus;
             }
             Action::SendToClaude => {
