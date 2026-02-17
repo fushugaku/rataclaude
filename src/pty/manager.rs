@@ -116,7 +116,7 @@ impl PtyManager {
                     return Err(std::io::Error::last_os_error());
                 }
                 // Set the slave as the controlling terminal
-                if libc::ioctl(slave_raw, libc::TIOCSCTTY as libc::c_ulong, 0i32) < 0 {
+                if libc::ioctl(slave_raw, libc::TIOCSCTTY as _, 0i32) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 // Dup slave to stdin/stdout/stderr
