@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::git::diff::{DiffLineKind, FileDiff};
-use crate::ui::syntax;
+use crate::ui::syntax::{self, HighlightSpan};
 
 // ── True-color palette (looks great on Ghostty) ─────────────────────
 const ADD_BG: Color = Color::Rgb(22, 39, 28);
@@ -44,6 +44,9 @@ pub struct DiffViewState {
     pub cursor: usize,
     pub select_anchor: Option<usize>,
     pub file_path: Option<String>,
+    /// Cached syntax-highlighted spans for each line in the diff.
+    /// Recomputed only when the diff changes (set_file / update_highlight_cache).
+    pub highlight_cache: Vec<Vec<HighlightSpan>>,
 }
 
 impl DiffViewState {
@@ -54,6 +57,7 @@ impl DiffViewState {
             cursor: 0,
             select_anchor: None,
             file_path: None,
+            highlight_cache: Vec::new(),
         }
     }
 
@@ -124,6 +128,7 @@ impl DiffViewState {
         self.cursor = 0;
         self.select_anchor = None;
         self.file_path = None;
+        self.highlight_cache.clear();
     }
 
     pub fn set_file(&mut self, path: &str) {
@@ -133,7 +138,23 @@ impl DiffViewState {
             self.h_scroll = 0;
             self.cursor = 0;
             self.select_anchor = None;
+            self.highlight_cache.clear();
         }
+    }
+
+    /// Pre-compute syntax highlighting for all lines in a diff.
+    /// Call this when the diff content changes.
+    pub fn update_highlight_cache(&mut self, diff: &FileDiff) {
+        let all_lines = diff.all_lines();
+        let lines_for_highlight: Vec<(String, bool)> = all_lines
+            .iter()
+            .map(|line| {
+                let content = line.content.trim_end_matches('\n').to_string();
+                let visible = line.kind != DiffLineKind::HunkHeader;
+                (content, visible)
+            })
+            .collect();
+        self.highlight_cache = syntax::highlight_diff_lines(&diff.path, &lines_for_highlight);
     }
 }
 
@@ -313,7 +334,13 @@ fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, focused: bool, area
                 let content = line.content.trim_end_matches('\n');
                 let h_off = state.h_scroll as usize;
                 let content_w = (scrollbar_x.saturating_sub(content_x + 1)) as usize;
-                let spans = syntax::highlight_line(&diff.path, content);
+                // Use cached highlights if available, otherwise empty
+                let empty_spans = Vec::new();
+                let spans = if line_idx < state.highlight_cache.len() {
+                    &state.highlight_cache[line_idx]
+                } else {
+                    &empty_spans
+                };
 
                 let mut cx = content_x + 1;
                 if spans.is_empty() {
@@ -332,7 +359,7 @@ fn render_diff_lines(diff: &FileDiff, state: &DiffViewState, focused: bool, area
                 } else {
                     // Walk through spans using char counts, not byte counts
                     let mut char_pos: usize = 0;
-                    for span in &spans {
+                    for span in spans {
                         let span_chars: usize = span.text.chars().count();
                         let span_end = char_pos + span_chars;
 

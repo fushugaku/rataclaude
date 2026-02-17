@@ -24,6 +24,7 @@ pub fn map_key(key: KeyEvent, focus: Focus) -> Option<Action> {
 }
 
 fn map_git_status_key(key: KeyEvent) -> Option<Action> {
+    // Normalize: with kitty protocol, Shift+c may come as ('c', SHIFT) or ('C', SHIFT)
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
             Some(Action::GitNavDown)
@@ -34,17 +35,18 @@ fn map_git_status_key(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::GitToggleStage),
         (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::GitStageAll),
         (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::GitShowDiff),
+        (KeyModifiers::NONE, KeyCode::Char('e')) => Some(Action::GitExpandFile),
         (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::GitDiscardFile),
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::SendToClaude),
-        (KeyModifiers::SHIFT, KeyCode::Char('S')) => Some(Action::SendToClaudeWithPrompt),
+        (KeyModifiers::SHIFT, KeyCode::Char('S')) | (KeyModifiers::SHIFT, KeyCode::Char('s')) => Some(Action::SendToClaudeWithPrompt),
         (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::Commit),
-        (KeyModifiers::SHIFT, KeyCode::Char('C')) => Some(Action::CommitAndPush),
+        (KeyModifiers::SHIFT, KeyCode::Char('C')) | (KeyModifiers::SHIFT, KeyCode::Char('c')) => Some(Action::CommitAndPush),
         (KeyModifiers::NONE, KeyCode::Char('p')) => Some(Action::Push),
-        (KeyModifiers::SHIFT, KeyCode::Char('P')) => Some(Action::Pull),
+        (KeyModifiers::SHIFT, KeyCode::Char('P')) | (KeyModifiers::SHIFT, KeyCode::Char('p')) => Some(Action::Pull),
         (KeyModifiers::NONE, KeyCode::Char('b')) => Some(Action::BranchList),
-        (KeyModifiers::SHIFT, KeyCode::Char('B')) => Some(Action::CreateBranch),
+        (KeyModifiers::SHIFT, KeyCode::Char('B')) | (KeyModifiers::SHIFT, KeyCode::Char('b')) => Some(Action::CreateBranch),
         (KeyModifiers::NONE, KeyCode::Char('z')) => Some(Action::Stash),
-        (KeyModifiers::SHIFT, KeyCode::Char('Z')) => Some(Action::StashPop),
+        (KeyModifiers::SHIFT, KeyCode::Char('Z')) | (KeyModifiers::SHIFT, KeyCode::Char('z')) => Some(Action::StashPop),
         (KeyModifiers::NONE, KeyCode::Char('v')) => Some(Action::ToggleMultiSelect),
         _ => None,
     }
@@ -64,14 +66,14 @@ fn map_diff_view_key(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('l')) | (KeyModifiers::NONE, KeyCode::Right) => {
             Some(Action::DiffScrollRight)
         }
-        (KeyModifiers::SHIFT, KeyCode::Char('J')) => Some(Action::DiffNextHunk),
-        (KeyModifiers::SHIFT, KeyCode::Char('K')) => Some(Action::DiffPrevHunk),
+        (KeyModifiers::SHIFT, KeyCode::Char('J')) | (KeyModifiers::SHIFT, KeyCode::Char('j')) => Some(Action::DiffNextHunk),
+        (KeyModifiers::SHIFT, KeyCode::Char('K')) | (KeyModifiers::SHIFT, KeyCode::Char('k')) => Some(Action::DiffPrevHunk),
         (KeyModifiers::NONE, KeyCode::Char(' ')) => Some(Action::DiffToggleSelect),
         (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
             Some(Action::DiffClose)
         }
         (KeyModifiers::NONE, KeyCode::Char('s')) => Some(Action::DiffSendLines),
-        (KeyModifiers::SHIFT, KeyCode::Char('S')) => Some(Action::SendToClaudeWithPrompt),
+        (KeyModifiers::SHIFT, KeyCode::Char('S')) | (KeyModifiers::SHIFT, KeyCode::Char('s')) => Some(Action::SendToClaudeWithPrompt),
         _ => None,
     }
 }

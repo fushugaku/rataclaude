@@ -214,6 +214,116 @@ impl GitRepo {
         })
     }
 
+    /// Show full file with diff markers (additions/deletions highlighted).
+    /// Uses a diff with maximum context lines so the entire file is visible.
+    pub fn file_contents(&self, path: &str, staged: bool) -> Result<FileDiff> {
+        // Try diff with full context first
+        let mut diff_opts = DiffOptions::new();
+        diff_opts.pathspec(path);
+        diff_opts.context_lines(u32::MAX);
+
+        let diff = if staged {
+            let head_tree = self.repo.head()
+                .ok()
+                .and_then(|h| h.peel_to_tree().ok());
+            self.repo.diff_tree_to_index(
+                head_tree.as_ref(),
+                None,
+                Some(&mut diff_opts),
+            )?
+        } else {
+            self.repo.diff_index_to_workdir(None, Some(&mut diff_opts))?
+        };
+
+        let mut hunks = Vec::new();
+        let mut current_lines: Vec<DiffLine> = Vec::new();
+
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            match line.origin() {
+                'H' | 'F' => {}
+                _ => {
+                    let content = String::from_utf8_lossy(line.content()).to_string();
+                    let kind = match line.origin() {
+                        '+' | '>' => DiffLineKind::Addition,
+                        '-' | '<' => DiffLineKind::Deletion,
+                        _ => DiffLineKind::Context,
+                    };
+
+                    current_lines.push(DiffLine {
+                        kind,
+                        content,
+                        old_lineno: line.old_lineno(),
+                        new_lineno: line.new_lineno(),
+                    });
+                }
+            }
+            true
+        })?;
+
+        if !current_lines.is_empty() {
+            let (adds, dels) = current_lines.iter().fold((0, 0), |(a, d), l| match l.kind {
+                DiffLineKind::Addition => (a + 1, d),
+                DiffLineKind::Deletion => (a, d + 1),
+                _ => (a, d),
+            });
+            let header = format!(
+                "@@ file: {} ({} lines, +{} -{}) @@\n",
+                path,
+                current_lines.len(),
+                adds,
+                dels
+            );
+            current_lines.insert(0, DiffLine {
+                kind: DiffLineKind::HunkHeader,
+                content: header.clone(),
+                old_lineno: None,
+                new_lineno: None,
+            });
+            hunks.push(DiffHunk { header, lines: current_lines });
+        }
+
+        // If no diff hunks (untracked or unchanged), read file directly
+        if hunks.is_empty() {
+            if let Some(workdir) = self.repo.workdir() {
+                let full_path = workdir.join(path);
+                if let Ok(content) = std::fs::read(&full_path) {
+                    if let Ok(text) = String::from_utf8(content) {
+                        let file_lines: Vec<&str> = text.split('\n').collect();
+                        let total = if text.ends_with('\n') {
+                            file_lines.len().saturating_sub(1)
+                        } else {
+                            file_lines.len()
+                        };
+                        let header = format!("@@ file: {} ({} lines) @@\n", path, total);
+                        let mut lines = vec![DiffLine {
+                            kind: DiffLineKind::HunkHeader,
+                            content: header.clone(),
+                            old_lineno: None,
+                            new_lineno: None,
+                        }];
+                        for (i, line) in file_lines.iter().enumerate() {
+                            if i == file_lines.len() - 1 && line.is_empty() && text.ends_with('\n') {
+                                break;
+                            }
+                            lines.push(DiffLine {
+                                kind: DiffLineKind::Addition,
+                                content: format!("{}\n", line),
+                                old_lineno: None,
+                                new_lineno: Some((i + 1) as u32),
+                            });
+                        }
+                        hunks.push(DiffHunk { header, lines });
+                    }
+                }
+            }
+        }
+
+        Ok(FileDiff {
+            path: path.to_string(),
+            hunks,
+        })
+    }
+
     pub fn branch_name(&self) -> Result<String> {
         let head = self.repo.head()?;
         Ok(head.shorthand().unwrap_or("HEAD").to_string())

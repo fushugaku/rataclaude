@@ -15,6 +15,7 @@ pub enum Action {
     GitStageAll,
     GitShowDiff,
     GitDiscardFile,
+    GitExpandFile,
 
     // Diff navigation
     DiffScrollUp,

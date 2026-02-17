@@ -1,5 +1,7 @@
 use crossterm::event::{Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
 
+use crate::git::status::FileStatus;
+
 #[derive(Debug)]
 pub enum AppEvent {
     Key(KeyEvent),
@@ -9,6 +11,8 @@ pub enum AppEvent {
     PtyExited,
     Tick,
     GitRefresh,
+    /// Async git status result from background thread
+    GitStatusUpdate(Vec<FileStatus>, String),
 }
 
 impl From<CrosstermEvent> for AppEvent {

@@ -2,6 +2,8 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 
+use tokio::sync::mpsc;
+
 use crate::action::{Action, FocusTarget};
 use crate::event::AppEvent;
 use crate::git::diff::FileDiff;
@@ -46,6 +48,10 @@ pub struct App {
     pub diff_rect: Rect,
     pub main_area: Rect,
     pub dragging_divider: bool,
+    // For async git refresh
+    pub event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+    workdir: String,
+    git_refreshing: bool,
 }
 
 impl App {
@@ -85,10 +91,14 @@ impl App {
             diff_rect: Rect::default(),
             main_area: Rect::default(),
             dragging_divider: false,
+            event_tx: None,
+            workdir: workdir.clone(),
+            git_refreshing: false,
         }
     }
 
-    pub fn refresh_git(&mut self) {
+    /// Synchronous git refresh (used for initial load)
+    pub fn refresh_git_sync(&mut self) {
         if let Some(ref repo) = self.git_repo {
             match repo.status_list() {
                 Ok(files) => self.files = files,
@@ -100,6 +110,25 @@ impl App {
         }
     }
 
+    /// Async git refresh — runs git status on a background thread
+    pub fn refresh_git(&mut self) {
+        if self.git_refreshing || self.git_repo.is_none() {
+            return;
+        }
+        if let Some(ref tx) = self.event_tx {
+            self.git_refreshing = true;
+            let workdir = self.workdir.clone();
+            let tx = tx.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Ok(repo) = GitRepo::open(&workdir) {
+                    let files = repo.status_list().unwrap_or_default();
+                    let branch = repo.branch_name().unwrap_or_else(|_| "N/A".to_string());
+                    let _ = tx.send(AppEvent::GitStatusUpdate(files, branch));
+                }
+            });
+        }
+    }
+
     pub fn refresh_diff(&mut self) {
         if let Some(ref repo) = self.git_repo {
             if let Some(idx) = self.status_state.selected_index() {
@@ -108,6 +137,7 @@ impl App {
                     match repo.diff_file(&file.path, staged) {
                         Ok(diff) => {
                             self.diff_state.set_file(&file.path);
+                            self.diff_state.update_highlight_cache(&diff);
                             self.current_diff = Some(diff);
                         }
                         Err(_) => {
@@ -161,6 +191,11 @@ impl App {
             AppEvent::Tick | AppEvent::GitRefresh => {
                 self.refresh_git();
             }
+            AppEvent::GitStatusUpdate(files, branch) => {
+                self.git_refreshing = false;
+                self.files = files;
+                self.branch = branch;
+            }
             AppEvent::Mouse(mouse) => {
                 self.handle_mouse(mouse).await?;
             }
@@ -205,32 +240,14 @@ impl App {
             MouseEventKind::ScrollDown => {
                 if rect_contains(self.diff_rect, mouse.column, mouse.row) {
                     self.handle_action(Action::DiffScrollAmount(3)).await?;
-                } else if rect_contains(self.pty_rect, mouse.column, mouse.row)
-                    && self.emulator.mouse_enabled()
-                {
-                    // Forward as SGR mouse scroll events (button 65 = scroll down)
-                    let x = mouse.column.saturating_sub(self.pty_rect.x) + 1;
-                    let y = mouse.row.saturating_sub(self.pty_rect.y) + 1;
-                    for _ in 0..3 {
-                        let seq = format!("\x1b[<65;{};{}M", x, y);
-                        self.pty.write_input(seq.as_bytes()).await?;
-                    }
                 }
+                // Don't forward scroll to PTY — it cycles Claude's prompt history
             }
             MouseEventKind::ScrollUp => {
                 if rect_contains(self.diff_rect, mouse.column, mouse.row) {
                     self.handle_action(Action::DiffScrollAmount(-3)).await?;
-                } else if rect_contains(self.pty_rect, mouse.column, mouse.row)
-                    && self.emulator.mouse_enabled()
-                {
-                    // Forward as SGR mouse scroll events (button 64 = scroll up)
-                    let x = mouse.column.saturating_sub(self.pty_rect.x) + 1;
-                    let y = mouse.row.saturating_sub(self.pty_rect.y) + 1;
-                    for _ in 0..3 {
-                        let seq = format!("\x1b[<64;{};{}M", x, y);
-                        self.pty.write_input(seq.as_bytes()).await?;
-                    }
                 }
+                // Don't forward scroll to PTY — it cycles Claude's prompt history
             }
             _ => {}
         }
@@ -296,7 +313,7 @@ impl App {
                             if let Err(e) = result {
                                 self.error_message = Some(format!("{}", e));
                             }
-                            self.refresh_git();
+                            self.refresh_git_sync();
                             self.refresh_diff();
                         }
                     }
@@ -307,13 +324,33 @@ impl App {
                     if let Err(e) = ops.stage_all() {
                         self.error_message = Some(format!("{}", e));
                     }
-                    self.refresh_git();
+                    self.refresh_git_sync();
                 }
             }
             Action::GitShowDiff => {
                 self.refresh_diff();
                 if self.current_diff.is_some() {
                     self.focus = Focus::DiffView;
+                }
+            }
+            Action::GitExpandFile => {
+                if let Some(ref repo) = self.git_repo {
+                    if let Some(idx) = self.status_state.selected_index() {
+                        if let Some(file) = self.files.get(idx) {
+                            let staged = file.stage_state == crate::git::status::StageState::Staged;
+                            match repo.file_contents(&file.path, staged) {
+                                Ok(diff) => {
+                                    self.diff_state.set_file(&file.path);
+                                    self.diff_state.update_highlight_cache(&diff);
+                                    self.current_diff = Some(diff);
+                                    self.focus = Focus::DiffView;
+                                }
+                                Err(e) => {
+                                    self.error_message = Some(format!("{}", e));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Action::GitDiscardFile => {
@@ -324,7 +361,7 @@ impl App {
                             if let Err(e) = ops.discard_file(&path) {
                                 self.error_message = Some(format!("{}", e));
                             }
-                            self.refresh_git();
+                            self.refresh_git_sync();
                         }
                     }
                 }
@@ -476,7 +513,7 @@ impl App {
                     match ops.pull() {
                         Ok(msg) => {
                             self.error_message = Some(format!("Pulled: {}", msg.trim()));
-                            self.refresh_git();
+                            self.refresh_git_sync();
                         }
                         Err(e) => self.error_message = Some(format!("Pull failed: {}", e)),
                     }
@@ -488,7 +525,7 @@ impl App {
                         Ok(msg) => self.error_message = Some(msg),
                         Err(e) => self.error_message = Some(format!("Stash failed: {}", e)),
                     }
-                    self.refresh_git();
+                    self.refresh_git_sync();
                 }
             }
             Action::StashPop => {
@@ -497,7 +534,7 @@ impl App {
                         Ok(msg) => self.error_message = Some(msg),
                         Err(e) => self.error_message = Some(format!("Stash pop failed: {}", e)),
                     }
-                    self.refresh_git();
+                    self.refresh_git_sync();
                 }
             }
             Action::CreateBranch => {
@@ -509,7 +546,7 @@ impl App {
                     if let Err(e) = ops.checkout_branch(&name) {
                         self.error_message = Some(format!("{}", e));
                     }
-                    self.refresh_git();
+                    self.refresh_git_sync();
                 }
             }
             Action::BranchList => {
@@ -544,22 +581,27 @@ impl App {
                                 if let Err(e) = ops.commit(&msg) {
                                     self.error_message = Some(format!("{}", e));
                                 }
-                                self.refresh_git();
+                                self.refresh_git_sync();
                             }
                         }
                         PromptMode::CommitAndPush => {
                             if let Some(ref ops) = self.git_ops {
                                 let msg = self.prompt_state.input.clone();
-                                match ops.commit(&msg) {
-                                    Ok(()) => {
-                                        match ops.push() {
-                                            Ok(out) => self.error_message = Some(format!("Committed & pushed: {}", out.trim())),
-                                            Err(e) => self.error_message = Some(format!("Committed but push failed: {}", e)),
+                                // Stage all changes first
+                                if let Err(e) = ops.stage_all() {
+                                    self.error_message = Some(format!("Stage failed: {}", e));
+                                } else {
+                                    match ops.commit(&msg) {
+                                        Ok(()) => {
+                                            match ops.push() {
+                                                Ok(out) => self.error_message = Some(format!("Committed & pushed: {}", out.trim())),
+                                                Err(e) => self.error_message = Some(format!("Committed but push failed: {}", e)),
+                                            }
                                         }
+                                        Err(e) => self.error_message = Some(format!("{}", e)),
                                     }
-                                    Err(e) => self.error_message = Some(format!("{}", e)),
                                 }
-                                self.refresh_git();
+                                self.refresh_git_sync();
                             }
                         }
                         PromptMode::CreateBranch => {
@@ -570,7 +612,7 @@ impl App {
                                 } else {
                                     self.error_message = Some(format!("Switched to new branch '{}'", name));
                                 }
-                                self.refresh_git();
+                                self.refresh_git_sync();
                             }
                         }
                         PromptMode::SendToClaude => {

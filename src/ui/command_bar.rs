@@ -50,6 +50,7 @@ impl Widget for CommandBar {
             Focus::GitStatus => {
                 spans.extend(Self::key_hint("j/k", "nav"));
                 spans.extend(Self::key_hint("Spc", "stage"));
+                spans.extend(Self::key_hint("e", "expand"));
                 spans.extend(Self::key_hint("s/S", "send"));
                 spans.extend(Self::key_hint("c", "commit"));
                 spans.extend(Self::key_hint("C", "commit+push"));

@@ -57,11 +57,14 @@ async fn run() -> Result<()> {
         PtyManager::spawn(pty_cols, pty_rows).context("spawn PTY")?;
     let mut app = App::new(pty_manager, pty_cols, pty_rows);
 
-    // Initial git refresh
-    app.refresh_git();
-
     // Event channel
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
+
+    // Give App a clone of the sender for async git refresh
+    app.event_tx = Some(tx.clone());
+
+    // Initial git refresh (synchronous, before loop starts)
+    app.refresh_git_sync();
 
     // Spawn PTY reader task (owns the reader half of the dup'd master fd)
     let tx_pty = tx.clone();
@@ -93,58 +96,63 @@ async fn run() -> Result<()> {
         }
     });
 
-    // Main loop
+    // Main loop: wait for events first, then batch, then draw
     while app.running {
-        // Draw
-        terminal.draw(|frame| {
-            let size = frame.area();
-            let (main_area, cmd_area) = AppLayout::with_command_bar(size);
-            let (pty_area, git_area) = app.layout.split(main_area);
-            let (status_area, diff_area) = AppLayout::split_right(git_area);
-
-            // Store rects for mouse hit-testing and drag resize
-            app.main_area = main_area;
-            app.update_rects(pty_area, status_area, diff_area);
-
-            // Resize PTY if needed
-            app.resize_pty(pty_area);
-
-            // Render PTY pane
-            let pty_pane = PtyPane::new(&app.emulator, app.focus == Focus::Pty);
-            pty_pane.render(pty_area, frame.buffer_mut());
-
-            // Render Git pane
-            let git_pane = GitPane {
-                files: &app.files,
-                diff: app.current_diff.as_ref(),
-                branch: &app.branch,
-                focus: app.focus,
-                status_state: &mut app.status_state,
-                diff_state: &app.diff_state,
-            };
-            git_pane.render(git_area, frame.buffer_mut());
-
-            // Command bar
-            let cmd_bar = CommandBar::new(app.focus, app.status_state.multi_select);
-            cmd_bar.render(cmd_area, frame.buffer_mut());
-
-            // Prompt dialog (modal overlay)
-            if app.prompt_state.visible {
-                let dialog = PromptDialog::new(&app.prompt_state);
-                dialog.render(main_area, frame.buffer_mut());
-            }
-        })?;
-
-        // Handle events (non-blocking drain)
-        while let Ok(event) = rx.try_recv() {
+        // Wait for at least one event
+        if let Some(event) = rx.recv().await {
             app.handle_event(event).await?;
+        } else {
+            break;
         }
 
-        // Wait for next event
-        if app.running {
-            if let Some(event) = rx.recv().await {
-                app.handle_event(event).await?;
+        // Drain all pending events before drawing (batch processing)
+        while let Ok(event) = rx.try_recv() {
+            app.handle_event(event).await?;
+            if !app.running {
+                break;
             }
+        }
+
+        // Draw once for all batched events
+        if app.running {
+            terminal.draw(|frame| {
+                let size = frame.area();
+                let (main_area, cmd_area) = AppLayout::with_command_bar(size);
+                let (pty_area, git_area) = app.layout.split(main_area);
+                let (status_area, diff_area) = AppLayout::split_right(git_area);
+
+                // Store rects for mouse hit-testing and drag resize
+                app.main_area = main_area;
+                app.update_rects(pty_area, status_area, diff_area);
+
+                // Resize PTY if needed
+                app.resize_pty(pty_area);
+
+                // Render PTY pane
+                let pty_pane = PtyPane::new(&app.emulator, app.focus == Focus::Pty);
+                pty_pane.render(pty_area, frame.buffer_mut());
+
+                // Render Git pane
+                let git_pane = GitPane {
+                    files: &app.files,
+                    diff: app.current_diff.as_ref(),
+                    branch: &app.branch,
+                    focus: app.focus,
+                    status_state: &mut app.status_state,
+                    diff_state: &app.diff_state,
+                };
+                git_pane.render(git_area, frame.buffer_mut());
+
+                // Command bar
+                let cmd_bar = CommandBar::new(app.focus, app.status_state.multi_select);
+                cmd_bar.render(cmd_area, frame.buffer_mut());
+
+                // Prompt dialog (modal overlay)
+                if app.prompt_state.visible {
+                    let dialog = PromptDialog::new(&app.prompt_state);
+                    dialog.render(main_area, frame.buffer_mut());
+                }
+            })?;
         }
     }
 
