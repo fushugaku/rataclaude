@@ -15,6 +15,7 @@ pub fn init() -> Result<Tui> {
         stdout,
         EnterAlternateScreen,
         crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableFocusChange,
         crossterm::event::PushKeyboardEnhancementFlags(
             crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         )
@@ -31,6 +32,7 @@ pub fn restore() -> Result<()> {
     let _ = execute!(
         stdout,
         crossterm::event::PopKeyboardEnhancementFlags,
+        crossterm::event::DisableFocusChange,
         LeaveAlternateScreen,
         crossterm::event::DisableMouseCapture
     );

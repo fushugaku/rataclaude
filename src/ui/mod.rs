@@ -6,3 +6,6 @@ pub mod diff_view;
 pub mod command_bar;
 pub mod prompt_dialog;
 pub mod syntax;
+pub mod tab_bar;
+pub mod file_panel;
+pub mod file_browser_pane;

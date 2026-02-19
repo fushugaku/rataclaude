@@ -1,13 +1,34 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::action::Action;
+use crate::action::{Action, ActiveTab};
 use crate::app::Focus;
 
-pub fn map_key(key: KeyEvent, focus: Focus) -> Option<Action> {
-    // Global bindings (always active)
+pub fn map_key(key: KeyEvent, focus: Focus, active_tab: ActiveTab) -> Option<Action> {
+    // Global bindings (always active, before anything else)
     match (key.modifiers, key.code) {
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => return Some(Action::Quit),
-        (KeyModifiers::NONE, KeyCode::Tab) => return Some(Action::ToggleFocus),
+        (KeyModifiers::CONTROL, KeyCode::Char(']')) => {
+            let next = match active_tab {
+                ActiveTab::ClaudeCode => ActiveTab::FileBrowser,
+                ActiveTab::FileBrowser => ActiveTab::ClaudeCode,
+            };
+            return Some(Action::SwitchTab(next));
+        }
+        _ => {}
+    }
+
+    match active_tab {
+        ActiveTab::ClaudeCode => map_claude_code_key(key, focus),
+        ActiveTab::FileBrowser => map_file_browser_key(key),
+    }
+}
+
+fn map_claude_code_key(key: KeyEvent, focus: Focus) -> Option<Action> {
+    // Tab-level bindings for Claude Code tab
+    match (key.modifiers, key.code) {
+        (KeyModifiers::SHIFT, KeyCode::BackTab) => return Some(Action::ToggleFocus),
+        (KeyModifiers::SHIFT, KeyCode::Tab) => return Some(Action::ToggleFocus),
+        (KeyModifiers::NONE, KeyCode::BackTab) => return Some(Action::ToggleFocus),
         (KeyModifiers::CONTROL, KeyCode::Char('\\')) => return Some(Action::ResizePanes(0)),
         _ => {}
     }
@@ -20,6 +41,31 @@ pub fn map_key(key: KeyEvent, focus: Focus) -> Option<Action> {
         Focus::GitStatus => map_git_status_key(key),
         Focus::DiffView => map_diff_view_key(key),
         Focus::PromptDialog => None, // handled directly in app
+        Focus::FileBrowserLeft | Focus::FileBrowserRight => None,
+    }
+}
+
+fn map_file_browser_key(key: KeyEvent) -> Option<Action> {
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+            Some(Action::FBNavDown)
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+            Some(Action::FBNavUp)
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::FBEnter),
+        (KeyModifiers::NONE, KeyCode::Backspace) => Some(Action::FBParentDir),
+        (KeyModifiers::NONE, KeyCode::Tab) => Some(Action::FBSwitchPanel),
+        (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::FBPageUp),
+        (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::FBPageDown),
+        (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::FBCopy),
+        (KeyModifiers::NONE, KeyCode::Char('m')) => Some(Action::FBMove),
+        (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::FBDelete),
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::FBRename),
+        (KeyModifiers::NONE, KeyCode::Char('n')) => Some(Action::FBMkdir),
+        (KeyModifiers::NONE, KeyCode::Char('.')) => Some(Action::FBToggleHidden),
+        (KeyModifiers::CONTROL, KeyCode::Char('r')) => Some(Action::FBRefresh),
+        _ => None,
     }
 }
 
@@ -108,7 +154,7 @@ pub fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
         KeyCode::Enter => bytes.push(b'\r'),
         KeyCode::Backspace => bytes.push(0x7f),
         KeyCode::Esc => bytes.push(0x1b),
-        KeyCode::Tab => bytes.push(b'\t'),
+        KeyCode::Tab => bytes.extend_from_slice(b"\x1b[9u"),
         KeyCode::Up => bytes.extend_from_slice(b"\x1b[A"),
         KeyCode::Down => bytes.extend_from_slice(b"\x1b[B"),
         KeyCode::Right => bytes.extend_from_slice(b"\x1b[C"),

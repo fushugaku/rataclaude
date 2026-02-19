@@ -4,14 +4,18 @@ use ratatui::{
     style::{Color, Modifier, Style},
 };
 
+use crate::app::PtySelection;
+
 pub struct TerminalEmulator {
     parser: vt100::Parser,
+    scroll_offset: usize,
 }
 
 impl TerminalEmulator {
     pub fn new(rows: u16, cols: u16) -> Self {
         Self {
             parser: vt100::Parser::new(rows, cols, 1000),
+            scroll_offset: 0,
         }
     }
 
@@ -32,8 +36,36 @@ impl TerminalEmulator {
             != vt100::MouseProtocolMode::None
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, focused: bool) {
+    /// Scroll up by N lines into the scrollback buffer
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_add(lines);
+        self.parser.set_scrollback(self.scroll_offset);
+        // Read back the clamped value
+        self.scroll_offset = self.parser.screen().scrollback();
+    }
+
+    /// Scroll down by N lines (towards live view)
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.parser.set_scrollback(self.scroll_offset);
+        self.scroll_offset = self.parser.screen().scrollback();
+    }
+
+    /// Return to live view (scroll_offset = 0)
+    pub fn reset_scroll(&mut self) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset = 0;
+            self.parser.set_scrollback(0);
+        }
+    }
+
+    pub fn is_scrolled(&self) -> bool {
+        self.scroll_offset > 0
+    }
+
+    pub fn render(&self, area: Rect, buf: &mut Buffer, focused: bool, selection: &PtySelection) {
         let screen = self.parser.screen();
+        let selection_bg = Color::Rgb(60, 80, 140);
 
         for row in 0..area.height {
             for col in 0..area.width {
@@ -43,9 +75,15 @@ impl TerminalEmulator {
                     let y = area.y + row;
 
                     if x < area.right() && y < area.bottom() {
+                        let is_selected = selection.contains(col, row);
+
                         let mut style = Style::default();
                         style = style.fg(vt100_color_to_ratatui(cell.fgcolor()));
-                        style = style.bg(vt100_color_to_ratatui(cell.bgcolor()));
+                        if is_selected {
+                            style = style.bg(selection_bg);
+                        } else {
+                            style = style.bg(vt100_color_to_ratatui(cell.bgcolor()));
+                        }
 
                         let mut modifiers = Modifier::empty();
                         if cell.bold() {
@@ -57,7 +95,7 @@ impl TerminalEmulator {
                         if cell.underline() {
                             modifiers |= Modifier::UNDERLINED;
                         }
-                        if cell.inverse() {
+                        if cell.inverse() && !is_selected {
                             modifiers |= Modifier::REVERSED;
                         }
                         style = style.add_modifier(modifiers);
@@ -70,8 +108,8 @@ impl TerminalEmulator {
             }
         }
 
-        // Render cursor
-        if focused {
+        // Render cursor only when at live view (not scrolled) and focused
+        if focused && !self.is_scrolled() {
             let cursor = screen.cursor_position();
             let cx = area.x + cursor.1;
             let cy = area.y + cursor.0;

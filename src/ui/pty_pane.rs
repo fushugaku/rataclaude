@@ -4,16 +4,18 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use crate::app::PtySelection;
 use crate::pty::terminal_emulator::TerminalEmulator;
 
 pub struct PtyPane<'a> {
     emulator: &'a TerminalEmulator,
     focused: bool,
+    selection: &'a PtySelection,
 }
 
 impl<'a> PtyPane<'a> {
-    pub fn new(emulator: &'a TerminalEmulator, focused: bool) -> Self {
-        Self { emulator, focused }
+    pub fn new(emulator: &'a TerminalEmulator, focused: bool, selection: &'a PtySelection) -> Self {
+        Self { emulator, focused, selection }
     }
 }
 
@@ -29,6 +31,6 @@ impl Widget for PtyPane<'_> {
 
         let inner = block.inner(area);
         block.render(area, buf);
-        self.emulator.render(inner, buf, self.focused);
+        self.emulator.render(inner, buf, self.focused, self.selection);
     }
 }

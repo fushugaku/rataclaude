@@ -6,12 +6,17 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
+use std::path::PathBuf;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptMode {
     SendToClaude,
     Commit,
     CommitAndPush,
     CreateBranch,
+    FBRename,
+    FBMkdir,
+    FBConfirmDelete,
 }
 
 pub struct PromptDialogState {
@@ -20,6 +25,10 @@ pub struct PromptDialogState {
     pub cursor_pos: usize,
     pub files: Vec<String>,
     pub mode: PromptMode,
+    // File browser operation paths
+    pub fb_delete_path: Option<PathBuf>,
+    pub fb_rename_path: Option<PathBuf>,
+    pub fb_mkdir_parent: Option<PathBuf>,
 }
 
 impl PromptDialogState {
@@ -30,6 +39,9 @@ impl PromptDialogState {
             cursor_pos: 0,
             files: Vec::new(),
             mode: PromptMode::SendToClaude,
+            fb_delete_path: None,
+            fb_rename_path: None,
+            fb_mkdir_parent: None,
         }
     }
 
@@ -65,11 +77,38 @@ impl PromptDialogState {
         self.mode = PromptMode::CreateBranch;
     }
 
+    pub fn open_fb_confirm_delete(&mut self, name: String) {
+        self.visible = true;
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.files = vec![name];
+        self.mode = PromptMode::FBConfirmDelete;
+    }
+
+    pub fn open_fb_rename(&mut self, current_name: String) {
+        self.visible = true;
+        self.input = current_name.clone();
+        self.cursor_pos = current_name.len();
+        self.files.clear();
+        self.mode = PromptMode::FBRename;
+    }
+
+    pub fn open_fb_mkdir(&mut self) {
+        self.visible = true;
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.files.clear();
+        self.mode = PromptMode::FBMkdir;
+    }
+
     pub fn close(&mut self) {
         self.visible = false;
         self.input.clear();
         self.cursor_pos = 0;
         self.files.clear();
+        self.fb_delete_path = None;
+        self.fb_rename_path = None;
+        self.fb_mkdir_parent = None;
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -146,6 +185,9 @@ impl Widget for PromptDialog<'_> {
             PromptMode::Commit => (" Commit ", "commit"),
             PromptMode::CommitAndPush => (" Commit & Push ", "commit+push"),
             PromptMode::CreateBranch => (" New Branch ", "create"),
+            PromptMode::FBRename => (" Rename ", "rename"),
+            PromptMode::FBMkdir => (" New Directory ", "create"),
+            PromptMode::FBConfirmDelete => (" Confirm Delete ", "delete"),
         };
 
         // Center the dialog
@@ -186,28 +228,47 @@ impl Widget for PromptDialog<'_> {
             .split(inner);
 
         if has_files {
-            let files_text = self.state.files.iter()
-                .map(|f| format!("@{}", f))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let files_line = Line::from(vec![
-                Span::styled("Files: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(files_text, Style::default().fg(Color::Green)),
-            ]);
-            Paragraph::new(files_line).render(chunks[0], buf);
+            let label = match self.state.mode {
+                PromptMode::FBConfirmDelete => {
+                    let files_text = self.state.files.join(", ");
+                    Line::from(vec![
+                        Span::styled("Delete: ", Style::default().fg(Color::Red)),
+                        Span::styled(files_text, Style::default().fg(Color::Yellow)),
+                    ])
+                }
+                _ => {
+                    let files_text = self.state.files.iter()
+                        .map(|f| format!("@{}", f))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    Line::from(vec![
+                        Span::styled("Files: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(files_text, Style::default().fg(Color::Green)),
+                    ])
+                }
+            };
+            Paragraph::new(label).render(chunks[0], buf);
         } else {
             let placeholder = match self.state.mode {
                 PromptMode::Commit | PromptMode::CommitAndPush => "Enter commit message:",
                 PromptMode::CreateBranch => "Enter branch name:",
+                PromptMode::FBRename => "Enter new name:",
+                PromptMode::FBMkdir => "Enter directory name:",
+                PromptMode::FBConfirmDelete => "Type 'yes' to confirm:",
                 _ => "",
             };
             let label = Line::from(Span::styled(placeholder, Style::default().fg(Color::DarkGray)));
             Paragraph::new(label).render(chunks[0], buf);
         }
 
-        // Input
+        // Input prompt
+        let prompt_prefix = match self.state.mode {
+            PromptMode::FBConfirmDelete => "Type 'yes': ",
+            _ => "> ",
+        };
+
         let input_line = Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled(prompt_prefix, Style::default().fg(Color::Cyan)),
             Span::raw(&self.state.input),
             Span::styled("_", Style::default().add_modifier(Modifier::SLOW_BLINK)),
         ]);

@@ -13,6 +13,10 @@ pub enum AppEvent {
     GitRefresh,
     /// Async git status result from background thread
     GitStatusUpdate(Vec<FileStatus>, String),
+    /// Terminal focus gained (from real terminal)
+    FocusGained,
+    /// Terminal focus lost (from real terminal)
+    FocusLost,
 }
 
 impl From<CrosstermEvent> for AppEvent {
@@ -22,6 +26,8 @@ impl From<CrosstermEvent> for AppEvent {
             CrosstermEvent::Key(_) => AppEvent::Tick, // ignore release/repeat
             CrosstermEvent::Mouse(mouse) => AppEvent::Mouse(mouse),
             CrosstermEvent::Resize(w, h) => AppEvent::Resize(w, h),
+            CrosstermEvent::FocusGained => AppEvent::FocusGained,
+            CrosstermEvent::FocusLost => AppEvent::FocusLost,
             _ => AppEvent::Tick,
         }
     }

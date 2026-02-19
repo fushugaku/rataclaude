@@ -6,16 +6,18 @@ use ratatui::{
     widgets::Widget,
 };
 
+use crate::action::ActiveTab;
 use crate::app::Focus;
 
 pub struct CommandBar {
     focus: Focus,
     multi_select: bool,
+    active_tab: ActiveTab,
 }
 
 impl CommandBar {
-    pub fn new(focus: Focus, multi_select: bool) -> Self {
-        Self { focus, multi_select }
+    pub fn new(focus: Focus, multi_select: bool, active_tab: ActiveTab) -> Self {
+        Self { focus, multi_select, active_tab }
     }
 
     fn key_hint(key: &str, desc: &str) -> Vec<Span<'static>> {
@@ -39,34 +41,55 @@ impl Widget for CommandBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut spans: Vec<Span> = vec![];
 
-        // Global hints
-        spans.extend(Self::key_hint("Tab", "focus"));
-        spans.extend(Self::key_hint("C-q", "quit"));
+        // Global tab hints
+        spans.extend(Self::key_hint("C-]", "tabs"));
 
-        match self.focus {
-            Focus::Pty => {
-                spans.extend(Self::key_hint("C-\\", "resize"));
+        match self.active_tab {
+            ActiveTab::ClaudeCode => {
+                // Existing hints
+                spans.extend(Self::key_hint("S-Tab", "focus"));
+                spans.extend(Self::key_hint("C-q", "quit"));
+
+                match self.focus {
+                    Focus::Pty => {
+                        spans.extend(Self::key_hint("C-\\", "resize"));
+                    }
+                    Focus::GitStatus => {
+                        spans.extend(Self::key_hint("j/k", "nav"));
+                        spans.extend(Self::key_hint("Spc", "stage"));
+                        spans.extend(Self::key_hint("e", "expand"));
+                        spans.extend(Self::key_hint("s/S", "send"));
+                        spans.extend(Self::key_hint("c", "commit"));
+                        spans.extend(Self::key_hint("C", "commit+push"));
+                        spans.extend(Self::key_hint("p/P", "push/pull"));
+                        spans.extend(Self::key_hint("b/B", "branch/new"));
+                        spans.extend(Self::key_hint("z/Z", "stash/pop"));
+                    }
+                    Focus::DiffView => {
+                        spans.extend(Self::key_hint("j/k", "scroll"));
+                        spans.extend(Self::key_hint("J/K", "hunk"));
+                        spans.extend(Self::key_hint("Esc", "back"));
+                        spans.extend(Self::key_hint("s", "send"));
+                    }
+                    Focus::PromptDialog => {
+                        spans.extend(Self::key_hint("Enter", "confirm"));
+                        spans.extend(Self::key_hint("Esc", "cancel"));
+                    }
+                    Focus::FileBrowserLeft | Focus::FileBrowserRight => {}
+                }
             }
-            Focus::GitStatus => {
+            ActiveTab::FileBrowser => {
+                spans.extend(Self::key_hint("C-q", "quit"));
                 spans.extend(Self::key_hint("j/k", "nav"));
-                spans.extend(Self::key_hint("Spc", "stage"));
-                spans.extend(Self::key_hint("e", "expand"));
-                spans.extend(Self::key_hint("s/S", "send"));
-                spans.extend(Self::key_hint("c", "commit"));
-                spans.extend(Self::key_hint("C", "commit+push"));
-                spans.extend(Self::key_hint("p/P", "push/pull"));
-                spans.extend(Self::key_hint("b/B", "branch/new"));
-                spans.extend(Self::key_hint("z/Z", "stash/pop"));
-            }
-            Focus::DiffView => {
-                spans.extend(Self::key_hint("j/k", "scroll"));
-                spans.extend(Self::key_hint("J/K", "hunk"));
-                spans.extend(Self::key_hint("Esc", "back"));
-                spans.extend(Self::key_hint("s", "send"));
-            }
-            Focus::PromptDialog => {
-                spans.extend(Self::key_hint("Enter", "confirm"));
-                spans.extend(Self::key_hint("Esc", "cancel"));
+                spans.extend(Self::key_hint("Enter", "open"));
+                spans.extend(Self::key_hint("Bksp", "up"));
+                spans.extend(Self::key_hint("Tab", "panel"));
+                spans.extend(Self::key_hint("c", "copy"));
+                spans.extend(Self::key_hint("m", "move"));
+                spans.extend(Self::key_hint("d", "delete"));
+                spans.extend(Self::key_hint("r", "rename"));
+                spans.extend(Self::key_hint("n", "mkdir"));
+                spans.extend(Self::key_hint(".", "hidden"));
             }
         }
 

@@ -3,6 +3,7 @@
 mod action;
 mod app;
 mod event;
+mod filebrowser;
 mod git;
 mod input;
 mod pty;
@@ -15,14 +16,17 @@ use futures::StreamExt;
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
+use action::ActiveTab;
 use app::{App, Focus};
 use event::AppEvent;
 use pty::manager::PtyManager;
 use ui::command_bar::CommandBar;
+use ui::file_browser_pane::FileBrowserPane;
 use ui::git_pane::GitPane;
 use ui::layout::AppLayout;
 use ui::prompt_dialog::PromptDialog;
 use ui::pty_pane::PtyPane;
+use ui::tab_bar::TabBar;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,12 +49,12 @@ async fn run() -> Result<()> {
     let mut terminal = tui::init().context("terminal init")?;
     let size = terminal.size().context("get terminal size")?;
 
-    // Compute initial PTY size from layout
+    // Compute initial PTY size from layout (account for tab bar + command bar = 2 rows)
     let layout = AppLayout::new();
-    let (main_area, _) = AppLayout::with_command_bar(ratatui::layout::Rect::new(
+    let (_, content_area, _) = AppLayout::with_tab_and_command_bar(ratatui::layout::Rect::new(
         0, 0, size.width, size.height,
     ));
-    let (pty_area, _) = layout.split(main_area);
+    let (pty_area, _) = layout.split(content_area);
     let (pty_cols, pty_rows) = AppLayout::pty_inner_size(pty_area);
 
     let (pty_manager, pty_reader) =
@@ -117,40 +121,74 @@ async fn run() -> Result<()> {
         if app.running {
             terminal.draw(|frame| {
                 let size = frame.area();
-                let (main_area, cmd_area) = AppLayout::with_command_bar(size);
-                let (pty_area, git_area) = app.layout.split(main_area);
-                let (status_area, diff_area) = AppLayout::split_right(git_area);
+                let (tab_area, content_area, cmd_area) =
+                    AppLayout::with_tab_and_command_bar(size);
 
-                // Store rects for mouse hit-testing and drag resize
-                app.main_area = main_area;
-                app.update_rects(pty_area, status_area, diff_area);
+                // Store tab bar rect for mouse hit-testing
+                app.tab_bar_rect = tab_area;
 
-                // Resize PTY if needed
-                app.resize_pty(pty_area);
+                // Render tab bar
+                let tab_bar = TabBar::new(app.active_tab);
+                tab_bar.render(tab_area, frame.buffer_mut());
 
-                // Render PTY pane
-                let pty_pane = PtyPane::new(&app.emulator, app.focus == Focus::Pty);
-                pty_pane.render(pty_area, frame.buffer_mut());
+                match app.active_tab {
+                    ActiveTab::ClaudeCode => {
+                        let (pty_area, git_area) = app.layout.split(content_area);
+                        let (status_area, diff_area) = AppLayout::split_right(git_area);
 
-                // Render Git pane
-                let git_pane = GitPane {
-                    files: &app.files,
-                    diff: app.current_diff.as_ref(),
-                    branch: &app.branch,
-                    focus: app.focus,
-                    status_state: &mut app.status_state,
-                    diff_state: &app.diff_state,
-                };
-                git_pane.render(git_area, frame.buffer_mut());
+                        // Store rects for mouse hit-testing and drag resize
+                        app.main_area = content_area;
+                        app.update_rects(pty_area, status_area, diff_area);
+
+                        // Resize PTY if needed
+                        app.resize_pty(pty_area);
+
+                        // Render PTY pane
+                        let pty_pane = PtyPane::new(&app.emulator, app.focus == Focus::Pty, &app.pty_selection);
+                        pty_pane.render(pty_area, frame.buffer_mut());
+
+                        // Render Git pane
+                        let git_pane = GitPane {
+                            files: &app.files,
+                            diff: app.current_diff.as_ref(),
+                            branch: &app.branch,
+                            focus: app.focus,
+                            status_state: &mut app.status_state,
+                            diff_state: &app.diff_state,
+                        };
+                        git_pane.render(git_area, frame.buffer_mut());
+                    }
+                    ActiveTab::FileBrowser => {
+                        // Ensure scroll offsets are correct for visible panels
+                        let inner_height = content_area.height.saturating_sub(2) as usize;
+                        app.file_browser.left.ensure_visible(inner_height);
+                        app.file_browser.right.ensure_visible(inner_height);
+
+                        let fb_pane = FileBrowserPane::new(&app.file_browser);
+                        fb_pane.render(content_area, frame.buffer_mut());
+
+                        // Clear pane rects so Claude Code mouse handling doesn't fire
+                        app.main_area = content_area;
+                        app.update_rects(
+                            ratatui::layout::Rect::default(),
+                            ratatui::layout::Rect::default(),
+                            ratatui::layout::Rect::default(),
+                        );
+                    }
+                }
 
                 // Command bar
-                let cmd_bar = CommandBar::new(app.focus, app.status_state.multi_select);
+                let cmd_bar = CommandBar::new(
+                    app.focus,
+                    app.status_state.multi_select,
+                    app.active_tab,
+                );
                 cmd_bar.render(cmd_area, frame.buffer_mut());
 
                 // Prompt dialog (modal overlay)
                 if app.prompt_state.visible {
                     let dialog = PromptDialog::new(&app.prompt_state);
-                    dialog.render(main_area, frame.buffer_mut());
+                    dialog.render(content_area, frame.buffer_mut());
                 }
             })?;
         }

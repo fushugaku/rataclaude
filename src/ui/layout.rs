@@ -49,6 +49,19 @@ impl AppLayout {
         (chunks[0], chunks[1])
     }
 
+    /// Tab bar (1 line) + content area + command bar (1 line)
+    pub fn with_tab_and_command_bar(area: Rect) -> (Rect, Rect, Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        (chunks[0], chunks[1], chunks[2])
+    }
+
     /// Inner area for the PTY (excluding border)
     pub fn pty_inner_size(area: Rect) -> (u16, u16) {
         // Account for right border (1 col)

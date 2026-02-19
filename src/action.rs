@@ -1,9 +1,16 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveTab {
+    ClaudeCode,
+    FileBrowser,
+}
+
 #[derive(Debug, Clone)]
 pub enum Action {
     Quit,
     ToggleFocus,
     FocusPane(FocusTarget),
     ResizePanes(i16),
+    SwitchTab(ActiveTab),
 
     // PTY actions
     PtyInput(Vec<u8>),
@@ -44,6 +51,26 @@ pub enum Action {
     BranchList,
     Stash,
     StashPop,
+
+    // File browser navigation
+    FBNavUp,
+    FBNavDown,
+    FBEnter,
+    FBParentDir,
+    FBSwitchPanel,
+    FBPageUp,
+    FBPageDown,
+
+    // File browser operations
+    FBCopy,
+    FBMove,
+    FBDelete,
+    FBRename,
+    FBMkdir,
+
+    // File browser misc
+    FBToggleHidden,
+    FBRefresh,
 }
 
 #[derive(Debug, Clone, Copy)]
